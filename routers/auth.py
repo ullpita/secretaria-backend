@@ -7,9 +7,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
-from ..lib.config import settings
-from ..lib.supabase import get_supabase
-from ..services.crypto import encrypt
+from lib.config import settings
+from lib.supabase import get_supabase
+from services.crypto import encrypt
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])

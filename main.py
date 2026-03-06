@@ -3,8 +3,8 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .lib.config import settings
-from .routers import vapi, auth
+from lib.config import settings
+from routers import vapi, auth
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,7 +28,6 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# CORS — allow frontend origin
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.FRONTEND_URL, "http://localhost:3000"],
@@ -37,7 +36,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers
 app.include_router(vapi.router)
 app.include_router(auth.router)
 

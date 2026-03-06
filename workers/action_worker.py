@@ -11,11 +11,11 @@ Flow:
 import uuid
 import logging
 from datetime import datetime, timezone
-from ..services.analyzer import analyze_call
-from ..services.gmail import send_email
-from ..services.calendar import create_event
-from ..lib.supabase import get_supabase
-from ..models.schemas import ExtractedAction, ActionResult
+from services.analyzer import analyze_call
+from services.gmail import send_email
+from services.calendar import create_event
+from lib.supabase import get_supabase
+from models.schemas import ExtractedAction, ActionResult
 
 logger = logging.getLogger(__name__)
 

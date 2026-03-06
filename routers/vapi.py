@@ -5,10 +5,10 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
-from ..lib.config import settings
-from ..lib.supabase import get_supabase
-from ..models.schemas import VapiMessage
-from ..workers.action_worker import process_call
+from lib.config import settings
+from lib.supabase import get_supabase
+from models.schemas import VapiMessage
+from workers.action_worker import process_call
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])

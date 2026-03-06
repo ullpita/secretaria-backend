@@ -2,9 +2,9 @@
 import logging
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
-from ..models.schemas import ExtractedAction, ActionResult
-from .crypto import decrypt
-from ..lib.supabase import get_supabase
+from models.schemas import ExtractedAction, ActionResult
+from services.crypto import decrypt
+from lib.supabase import get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ async def get_calendar_credentials(org_id: str) -> Credentials | None:
         logger.error("Failed to decrypt Calendar tokens for org %s: %s", org_id, e)
         return None
 
-    from ..lib.config import settings
+    from lib.config import settings
     return Credentials(
         token=access_token,
         refresh_token=refresh_token,

@@ -2,7 +2,7 @@
 import os
 import base64
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from ..lib.config import settings
+from lib.config import settings
 
 
 def _key() -> bytes:

@@ -3,8 +3,8 @@ import json
 import re
 import logging
 from anthropic import AsyncAnthropic
-from ..lib.config import settings
-from ..models.schemas import CallAnalysis
+from lib.config import settings
+from models.schemas import CallAnalysis
 
 logger = logging.getLogger(__name__)
 

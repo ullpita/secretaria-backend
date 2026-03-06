@@ -5,20 +5,20 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     APP_ENV: str = "development"
-    SECRET_KEY: str
+    SECRET_KEY: str = "dev_secret_change_in_production"
 
-    ANTHROPIC_API_KEY: str
-    VAPI_WEBHOOK_SECRET: str
+    ANTHROPIC_API_KEY: str = ""
+    VAPI_WEBHOOK_SECRET: str = ""
 
-    GOOGLE_CLIENT_ID: str
-    GOOGLE_CLIENT_SECRET: str
-    GOOGLE_REDIRECT_URI: str
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
 
-    SUPABASE_URL: str
-    SUPABASE_SERVICE_KEY: str
+    SUPABASE_URL: str = ""
+    SUPABASE_SERVICE_KEY: str = ""
 
     REDIS_URL: str = "redis://localhost:6379"
-    TOKEN_ENCRYPTION_KEY: str  # 64-char hex = 32 bytes
+    TOKEN_ENCRYPTION_KEY: str = "0" * 64
 
     FRONTEND_URL: str = "http://localhost:3000"
 
