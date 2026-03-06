@@ -23,6 +23,9 @@ VAPI_EVENTS = {
 
 def _verify_signature(body: bytes, signature: str | None) -> bool:
     """Validate Vapi HMAC-SHA256 webhook signature."""
+    # If no secret configured, allow all requests (useful when Vapi doesn't sign)
+    if not settings.VAPI_WEBHOOK_SECRET:
+        return True
     if not signature:
         return not settings.is_production  # Allow in dev without sig
     expected = hmac.new(
