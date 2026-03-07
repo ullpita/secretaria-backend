@@ -146,6 +146,9 @@ async def request_account_delete(request: Request):
         user_resp = sb.auth.get_user(jwt)
     except AuthApiError as e:
         raise HTTPException(401, f"Invalid token: {e}")
+    except Exception as e:
+        logger.error("get_user failed: %s", e)
+        raise HTTPException(500, f"Auth error: {e}")
 
     user = user_resp.user
     deletion_token = secrets.token_urlsafe(32)
@@ -156,28 +159,33 @@ async def request_account_delete(request: Request):
     }
 
     confirm_url = f"{settings.FRONTEND_URL}/confirm-delete?token={deletion_token}"
-    await send_transactional_email(
-        to=user.email,
-        subject="Confirmez la suppression de votre compte Secretaria",
-        html=f"""
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
-          <h2 style="color:#111;margin-bottom:8px">Suppression de compte</h2>
-          <p style="color:#555;line-height:1.6">
-            Vous avez demandé la suppression définitive de votre compte Secretaria
-            et de toutes vos données associées.
-          </p>
-          <p style="margin:24px 0">
-            <a href="{confirm_url}"
-               style="background:#ef4444;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;display:inline-block">
-              Confirmer la suppression
-            </a>
-          </p>
-          <p style="color:#999;font-size:13px">
-            Ce lien expire dans 15 minutes. Si vous n'avez pas demandé cette action, ignorez cet email.
-          </p>
-        </div>
-        """,
-    )
+    try:
+        await send_transactional_email(
+            to=user.email,
+            subject="Confirmez la suppression de votre compte Secretaria",
+            html=f"""
+            <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+              <h2 style="color:#111;margin-bottom:8px">Suppression de compte</h2>
+              <p style="color:#555;line-height:1.6">
+                Vous avez demandé la suppression définitive de votre compte Secretaria
+                et de toutes vos données associées.
+              </p>
+              <p style="margin:24px 0">
+                <a href="{confirm_url}"
+                   style="background:#ef4444;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;display:inline-block">
+                  Confirmer la suppression
+                </a>
+              </p>
+              <p style="color:#999;font-size:13px">
+                Ce lien expire dans 15 minutes. Si vous n'avez pas demandé cette action, ignorez cet email.
+              </p>
+            </div>
+            """,
+        )
+    except Exception as e:
+        logger.error("Failed to send deletion email to %s: %s", user.email, e)
+        del _deletion_tokens[deletion_token]
+        raise HTTPException(500, f"Échec d'envoi de l'email: {e}")
 
     logger.info("Deletion email sent for user %s (%s)", user.id, user.email)
     return {"status": "email_sent"}
