@@ -2,7 +2,8 @@
 import json
 import secrets
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from google_auth_oauthlib.flow import Flow
@@ -10,6 +11,8 @@ from google.oauth2.credentials import Credentials
 from lib.config import settings
 from lib.supabase import get_supabase
 from services.crypto import encrypt
+from services.email import send_transactional_email
+from gotrue.errors import AuthApiError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -29,6 +32,11 @@ SCOPES = {
 
 # In-memory state store (use Redis in production for multi-instance)
 _pending_states: dict[str, dict] = {}
+_deletion_tokens: dict[str, dict] = {}  # token -> {user_id, email, expires_at}
+
+
+class ConfirmDeleteRequest(BaseModel):
+    token: str
 
 
 def _make_flow(scope: str) -> Flow:
@@ -122,3 +130,79 @@ async def google_auth_callback(request: Request, code: str, state: str):
 
     logger.info("Stored %s tokens for org %s", scope, org_id)
     return RedirectResponse(f"{settings.FRONTEND_URL}{redirect_path}?connected={scope}")
+
+
+@router.post("/account/request-delete")
+async def request_account_delete(request: Request):
+    """Send a deletion confirmation email to the authenticated user."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Missing or invalid Authorization header")
+
+    jwt = auth_header.split(" ", 1)[1]
+    sb = get_supabase()
+
+    try:
+        user_resp = sb.auth.get_user(jwt)
+    except AuthApiError as e:
+        raise HTTPException(401, f"Invalid token: {e}")
+
+    user = user_resp.user
+    deletion_token = secrets.token_urlsafe(32)
+    _deletion_tokens[deletion_token] = {
+        "user_id": user.id,
+        "email": user.email,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=15),
+    }
+
+    confirm_url = f"{settings.FRONTEND_URL}/confirm-delete?token={deletion_token}"
+    await send_transactional_email(
+        to=user.email,
+        subject="Confirmez la suppression de votre compte Secretaria",
+        html=f"""
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px">
+          <h2 style="color:#111;margin-bottom:8px">Suppression de compte</h2>
+          <p style="color:#555;line-height:1.6">
+            Vous avez demandé la suppression définitive de votre compte Secretaria
+            et de toutes vos données associées.
+          </p>
+          <p style="margin:24px 0">
+            <a href="{confirm_url}"
+               style="background:#ef4444;color:#fff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;display:inline-block">
+              Confirmer la suppression
+            </a>
+          </p>
+          <p style="color:#999;font-size:13px">
+            Ce lien expire dans 15 minutes. Si vous n'avez pas demandé cette action, ignorez cet email.
+          </p>
+        </div>
+        """,
+    )
+
+    logger.info("Deletion email sent for user %s (%s)", user.id, user.email)
+    return {"status": "email_sent"}
+
+
+@router.post("/account/confirm-delete")
+async def confirm_account_delete(req: ConfirmDeleteRequest):
+    """Complete account deletion after email confirmation."""
+    data = _deletion_tokens.get(req.token)
+    if not data:
+        raise HTTPException(400, "Lien invalide ou déjà utilisé.")
+
+    if datetime.now(timezone.utc) > data["expires_at"]:
+        del _deletion_tokens[req.token]
+        raise HTTPException(400, "Lien expiré. Recommencez la procédure depuis le dashboard.")
+
+    user_id = data["user_id"]
+    del _deletion_tokens[req.token]
+
+    sb = get_supabase()
+    try:
+        sb.auth.admin.delete_user(user_id)
+    except AuthApiError as e:
+        logger.error("Failed to delete user %s: %s", user_id, e)
+        raise HTTPException(500, f"Erreur lors de la suppression: {e}")
+
+    logger.info("Account confirmed deleted: %s", user_id)
+    return {"status": "deleted"}

@@ -22,6 +22,12 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str = "http://localhost:3000"
 
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASS: str = ""
+    SMTP_FROM: str = "noreply@secretaria.app"
+
     @property
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
