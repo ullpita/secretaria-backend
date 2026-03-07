@@ -4,18 +4,15 @@ Post-call async worker.
 Flow:
   1. Analyze transcript with Claude → CallAnalysis
   2. Save call to Supabase (calls table)
-  3. Execute each action (email / calendar / task)
-  4. Save action results to Supabase (call_actions table)
-  5. Create tasks in Supabase (tasks table)
+  3. Save actions as pending (email/calendar) or execute immediately (task)
+  4. User approves/rejects via /actions/:id/approve endpoint
 """
 import uuid
 import logging
 from datetime import datetime, timezone
 from services.analyzer import analyze_call
-from services.gmail import send_email
-from services.calendar import create_event
 from lib.supabase import get_supabase
-from models.schemas import ExtractedAction, ActionResult
+from models.schemas import ExtractedAction
 
 logger = logging.getLogger(__name__)
 
@@ -65,73 +62,65 @@ async def process_call(payload: dict) -> None:
     except Exception as e:
         logger.error("[%s] Failed to save call: %s", call_id, e)
 
-    # ── Step 3: Execute actions ────────────────────────────────────────────────
-    action_results: list[ActionResult] = []
-
+    # ── Step 3: Save actions (pending for email/calendar, auto for task) ───────
+    action_rows = []
     for action in analysis.actions:
-        result = await _execute_action(action, org_id, call_id, analysis.caller_name, caller_number)
-        action_results.append(result)
-
-    # ── Step 4: Save action results ───────────────────────────────────────────
-    if action_results:
-        action_rows = [
-            {
-                "id": f"a_{uuid.uuid4().hex[:8]}",
+        action_id = f"a_{uuid.uuid4().hex[:8]}"
+        if action.type == "task":
+            await _create_task(action, org_id, call_id, analysis.caller_name, caller_number)
+            action_rows.append({
+                "id": action_id,
                 "call_id": call_id,
                 "org_id": org_id,
-                "type": r.type,
-                "label": r.label,
-                "detail": r.detail,
-                "status": r.status,
-                "error": r.error,
+                "type": action.type,
+                "label": action.label,
+                "detail": action.detail,
+                "status": "success",
+                "error": None,
+                "metadata": None,
                 "executed_at": datetime.now(timezone.utc).isoformat(),
-            }
-            for r in action_results
-        ]
+            })
+        else:
+            # email / calendar_event → pending, stored with full content for approval
+            action_rows.append({
+                "id": action_id,
+                "call_id": call_id,
+                "org_id": org_id,
+                "type": action.type,
+                "label": action.label,
+                "detail": action.detail,
+                "status": "pending",
+                "error": None,
+                "metadata": _build_metadata(action),
+                "executed_at": None,
+            })
+
+    if action_rows:
         try:
             sb.table("call_actions").insert(action_rows).execute()
         except Exception as e:
-            logger.error("[%s] Failed to save action results: %s", call_id, e)
+            logger.error("[%s] Failed to save actions: %s", call_id, e)
 
-    logger.info(
-        "[%s] Done — %d/%d actions succeeded",
-        call_id,
-        sum(1 for r in action_results if r.status == "success"),
-        len(action_results),
-    )
+    pending = sum(1 for r in action_rows if r["status"] == "pending")
+    logger.info("[%s] Done — %d pending approval, %d auto-executed", call_id, pending, len(action_rows) - pending)
 
 
-async def _execute_action(
-    action: ExtractedAction,
-    org_id: str | None,
-    call_id: str,
-    caller_name: str | None,
-    caller_number: str,
-) -> ActionResult:
-    """Route action to the right executor."""
-    try:
-        if action.type == "email":
-            if not org_id:
-                return ActionResult(type="email", label=action.label, detail=action.detail,
-                                    status="failed", error="No org_id — cannot load Gmail credentials")
-            return await send_email(action, org_id)
-
-        elif action.type == "calendar_event":
-            if not org_id:
-                return ActionResult(type="calendar_event", label=action.label, detail=action.detail,
-                                    status="failed", error="No org_id — cannot load Calendar credentials")
-            return await create_event(action, org_id)
-
-        elif action.type == "task":
-            return await _create_task(action, org_id, call_id, caller_name, caller_number)
-
-        else:
-            return ActionResult(type=action.type, label=action.label, detail=action.detail,
-                                status="failed", error=f"Unknown action type: {action.type}")
-    except Exception as e:
-        logger.error("Action %s failed unexpectedly: %s", action.type, e)
-        return ActionResult(type=action.type, label=action.label, detail=action.detail,
-                            status="failed", error=str(e))
+def _build_metadata(action: ExtractedAction) -> dict:
+    """Extract rich content from action for pending approval display."""
+    if action.type == "email":
+        return {
+            "to": action.to or "",
+            "subject": action.subject or "",
+            "body": action.body or "",
+        }
+    elif action.type == "calendar_event":
+        return {
+            "title": action.title or action.label,
+            "start_datetime": action.start_datetime or "",
+            "end_datetime": action.end_datetime or "",
+            "attendee_email": action.attendee_email or "",
+        }
+    return {}
 
 
 async def _create_task(
@@ -140,7 +129,7 @@ async def _create_task(
     call_id: str,
     caller_name: str | None,
     caller_number: str,
-) -> ActionResult:
+) -> None:
     sb = get_supabase()
     task_row = {
         "id": f"t_{uuid.uuid4().hex[:8]}",
@@ -157,7 +146,5 @@ async def _create_task(
     }
     try:
         sb.table("tasks").insert(task_row).execute()
-        return ActionResult(type="task", label=action.label, detail=action.detail, status="success")
     except Exception as e:
-        return ActionResult(type="task", label=action.label, detail=action.detail,
-                            status="failed", error=str(e))
+        logger.error("Failed to create task: %s", e)
