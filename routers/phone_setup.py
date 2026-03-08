@@ -1,10 +1,9 @@
 """Automated Vapi phone + assistant setup.
 
-Flow:
-  1. Check if Twilio number already exists in Vapi (avoid duplicate import)
-  2. Create Sofia assistant via Vapi API with org_id in metadata + webhook URL
-  3. Import (or update) Twilio number and link to assistant
-  4. Save vapi_phone_id + vapi_assistant_id + sofia_phone to Supabase organizations
+Two flows:
+  A. provision  — Secretaria buys a French number from its own Twilio account.
+                  User just clicks a button, no credentials needed.
+  B. bring-your-own — User provides their own Twilio Account SID + Auth Token + number.
 """
 import logging
 import re
@@ -18,6 +17,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/setup", tags=["setup"])
 
 VAPI_API = "https://api.vapi.ai"
+TWILIO_API = "https://api.twilio.com/2010-04-01"
 
 SOFIA_SYSTEM_PROMPT = (
     "Tu es Sofia, une assistante vocale professionnelle et bienveillante. "
@@ -29,42 +29,31 @@ SOFIA_SYSTEM_PROMPT = (
 
 
 def _normalize_phone(number: str) -> str:
-    """Strip spaces and ensure E.164 format."""
     return re.sub(r"\s+", "", number)
 
 
-class PhoneSetupRequest(BaseModel):
-    org_id: str
-    twilio_account_sid: str
-    twilio_auth_token: str
-    phone_number: str  # E.164: +33159580013
+# ── Shared Vapi helper ────────────────────────────────────────────────────────
 
+async def _configure_vapi(
+    org_id: str,
+    phone_number: str,
+    twilio_account_sid: str,
+    twilio_auth_token: str,
+) -> tuple[str, str]:
+    """Create Sofia assistant in Vapi, import (or update) Twilio number, link them.
 
-class PhoneSetupResponse(BaseModel):
-    success: bool
-    phone_number: str
-    vapi_phone_id: str
-    vapi_assistant_id: str
-
-
-@router.post("/phone", response_model=PhoneSetupResponse)
-async def setup_phone(req: PhoneSetupRequest):
-    """Import Twilio number into Vapi, create Sofia assistant, link them."""
-    if not settings.VAPI_API_KEY:
-        raise HTTPException(500, "VAPI_API_KEY not configured on server")
-
-    normalized = _normalize_phone(req.phone_number)
+    Returns (vapi_phone_id, vapi_assistant_id).
+    """
+    normalized = _normalize_phone(phone_number)
     webhook_url = f"{settings.BACKEND_URL}/webhooks/vapi"
-
     headers = {
         "Authorization": f"Bearer {settings.VAPI_API_KEY}",
         "Content-Type": "application/json",
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
-
-        # ── Step 1: Create Sofia assistant ────────────────────────────────
-        assistant_payload = {
+        # Step 1: Create Sofia assistant
+        asst_resp = await client.post(f"{VAPI_API}/assistant", headers=headers, json={
             "name": "Sofia",
             "model": {
                 "provider": "anthropic",
@@ -78,22 +67,15 @@ async def setup_phone(req: PhoneSetupRequest):
             "firstMessageMode": "assistant-speaks-first",
             "firstMessage": "Bonjour, je suis Sofia, comment puis-je vous aider ?",
             "serverUrl": webhook_url,
-            "metadata": {"org_id": req.org_id},
-        }
-
-        asst_resp = await client.post(
-            f"{VAPI_API}/assistant", headers=headers, json=assistant_payload
-        )
+            "metadata": {"org_id": org_id},
+        })
         if asst_resp.status_code not in (200, 201):
-            logger.error("Failed to create Vapi assistant: %s", asst_resp.text)
-            raise HTTPException(
-                400, f"Impossible de créer l'assistant Sofia: {asst_resp.text}"
-            )
+            raise HTTPException(400, f"Impossible de créer l'assistant Sofia: {asst_resp.text}")
 
         assistant_id: str = asst_resp.json()["id"]
-        logger.info("Created Vapi assistant %s for org %s", assistant_id, req.org_id)
+        logger.info("Created Vapi assistant %s for org %s", assistant_id, org_id)
 
-        # ── Step 2: Check if phone number already exists in Vapi ──────────
+        # Step 2: Check if phone already exists in Vapi
         existing_phone_id: str | None = None
         list_resp = await client.get(f"{VAPI_API}/phone-number", headers=headers)
         if list_resp.status_code == 200:
@@ -103,7 +85,6 @@ async def setup_phone(req: PhoneSetupRequest):
                     break
 
         if existing_phone_id:
-            # Update existing phone number to point to the new assistant
             patch_resp = await client.patch(
                 f"{VAPI_API}/phone-number/{existing_phone_id}",
                 headers=headers,
@@ -112,56 +93,135 @@ async def setup_phone(req: PhoneSetupRequest):
             if patch_resp.status_code not in (200, 201):
                 logger.warning("Failed to update existing phone: %s", patch_resp.text)
             vapi_phone_id = existing_phone_id
-            logger.info("Linked existing Vapi phone %s to assistant %s", vapi_phone_id, assistant_id)
+            logger.info("Linked existing phone %s to assistant %s", vapi_phone_id, assistant_id)
         else:
-            # Import Twilio number into Vapi
-            phone_payload = {
+            phone_resp = await client.post(f"{VAPI_API}/phone-number", headers=headers, json={
                 "provider": "twilio",
                 "number": normalized,
-                "twilioAccountSid": req.twilio_account_sid,
-                "twilioAuthToken": req.twilio_auth_token,
+                "twilioAccountSid": twilio_account_sid,
+                "twilioAuthToken": twilio_auth_token,
                 "assistantId": assistant_id,
-            }
-            phone_resp = await client.post(
-                f"{VAPI_API}/phone-number", headers=headers, json=phone_payload
-            )
+            })
             if phone_resp.status_code not in (200, 201):
-                # Rollback: delete the assistant we just created
-                await client.delete(
-                    f"{VAPI_API}/assistant/{assistant_id}", headers=headers
-                )
-                logger.error("Failed to import Twilio number: %s", phone_resp.text)
-                raise HTTPException(
-                    400, f"Impossible d'importer le numéro Twilio: {phone_resp.text}"
-                )
+                await client.delete(f"{VAPI_API}/assistant/{assistant_id}", headers=headers)
+                raise HTTPException(400, f"Impossible d'importer le numéro: {phone_resp.text}")
             vapi_phone_id = phone_resp.json()["id"]
-            logger.info("Imported Twilio %s as Vapi phone %s", normalized, vapi_phone_id)
+            logger.info("Imported %s as Vapi phone %s", normalized, vapi_phone_id)
 
-    # ── Step 3: Persist to Supabase ───────────────────────────────────────
+    return vapi_phone_id, assistant_id
+
+
+def _save_to_supabase(org_id: str, phone_number: str, vapi_phone_id: str, assistant_id: str) -> None:
     sb = get_supabase()
     try:
-        sb.table("organizations").update(
-            {
-                "sofia_phone": normalized,
-                "vapi_phone_id": vapi_phone_id,
-                "vapi_assistant_id": assistant_id,
-            }
-        ).eq("id", req.org_id).execute()
+        sb.table("organizations").update({
+            "sofia_phone": phone_number,
+            "vapi_phone_id": vapi_phone_id,
+            "vapi_assistant_id": assistant_id,
+        }).eq("id", org_id).execute()
     except Exception as e:
-        logger.error("Failed to save phone config to Supabase: %s", e)
-        # Non-fatal — Vapi is configured correctly, only DB save failed
+        logger.error("Failed to save phone config: %s", e)
 
-    return PhoneSetupResponse(
-        success=True,
-        phone_number=normalized,
-        vapi_phone_id=vapi_phone_id,
-        vapi_assistant_id=assistant_id,
+
+# ── Route A: Secretaria provisions the number ─────────────────────────────────
+
+class ProvisionRequest(BaseModel):
+    org_id: str
+
+
+@router.post("/phone/provision")
+async def provision_phone(req: ProvisionRequest):
+    """Buy a French number from Secretaria's Twilio account and configure Sofia."""
+    if not settings.VAPI_API_KEY:
+        raise HTTPException(500, "VAPI_API_KEY non configuré")
+    if not settings.TWILIO_ACCOUNT_SID or not settings.TWILIO_AUTH_TOKEN:
+        raise HTTPException(500, "Identifiants Twilio Secretaria non configurés")
+
+    twilio_auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        # Search available French local numbers
+        search_resp = await client.get(
+            f"{TWILIO_API}/Accounts/{settings.TWILIO_ACCOUNT_SID}/AvailablePhoneNumbers/FR/Local.json",
+            auth=twilio_auth,
+            params={"VoiceEnabled": "true", "PageSize": "5"},
+        )
+        if search_resp.status_code != 200:
+            raise HTTPException(400, f"Impossible de chercher des numéros français: {search_resp.text}")
+
+        numbers = search_resp.json().get("available_phone_numbers", [])
+        if not numbers:
+            raise HTTPException(404, "Aucun numéro français disponible pour le moment")
+
+        chosen = numbers[0]["phone_number"]
+        logger.info("Provisioning Twilio number %s for org %s", chosen, req.org_id)
+
+        # Purchase the number
+        buy_resp = await client.post(
+            f"{TWILIO_API}/Accounts/{settings.TWILIO_ACCOUNT_SID}/IncomingPhoneNumbers.json",
+            auth=twilio_auth,
+            data={"PhoneNumber": chosen},
+        )
+        if buy_resp.status_code not in (200, 201):
+            raise HTTPException(400, f"Impossible d'acheter le numéro: {buy_resp.text}")
+
+        logger.info("Purchased %s", chosen)
+
+    # Configure Vapi with Secretaria's Twilio credentials
+    vapi_phone_id, assistant_id = await _configure_vapi(
+        org_id=req.org_id,
+        phone_number=chosen,
+        twilio_account_sid=settings.TWILIO_ACCOUNT_SID,
+        twilio_auth_token=settings.TWILIO_AUTH_TOKEN,
     )
 
+    _save_to_supabase(req.org_id, chosen, vapi_phone_id, assistant_id)
+
+    return {
+        "success": True,
+        "phone_number": chosen,
+        "vapi_phone_id": vapi_phone_id,
+        "vapi_assistant_id": assistant_id,
+    }
+
+
+# ── Route B: User brings their own Twilio number ──────────────────────────────
+
+class PhoneSetupRequest(BaseModel):
+    org_id: str
+    twilio_account_sid: str
+    twilio_auth_token: str
+    phone_number: str
+
+
+@router.post("/phone")
+async def setup_phone(req: PhoneSetupRequest):
+    """Import user's own Twilio number into Vapi and configure Sofia."""
+    if not settings.VAPI_API_KEY:
+        raise HTTPException(500, "VAPI_API_KEY non configuré")
+
+    normalized = _normalize_phone(req.phone_number)
+    vapi_phone_id, assistant_id = await _configure_vapi(
+        org_id=req.org_id,
+        phone_number=normalized,
+        twilio_account_sid=req.twilio_account_sid,
+        twilio_auth_token=req.twilio_auth_token,
+    )
+
+    _save_to_supabase(req.org_id, normalized, vapi_phone_id, assistant_id)
+
+    return {
+        "success": True,
+        "phone_number": normalized,
+        "vapi_phone_id": vapi_phone_id,
+        "vapi_assistant_id": assistant_id,
+    }
+
+
+# ── Status ────────────────────────────────────────────────────────────────────
 
 @router.get("/phone/{org_id}")
 async def get_phone_config(org_id: str):
-    """Return current phone config for an org."""
     sb = get_supabase()
     result = (
         sb.table("organizations")

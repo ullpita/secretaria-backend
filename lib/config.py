@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     VAPI_API_KEY: str = ""
     BACKEND_URL: str = "http://localhost:8000"
 
+    TWILIO_ACCOUNT_SID: str = ""
+    TWILIO_AUTH_TOKEN: str = ""
+
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/auth/google/callback"
