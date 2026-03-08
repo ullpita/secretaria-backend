@@ -9,6 +9,8 @@ class Settings(BaseSettings):
 
     ANTHROPIC_API_KEY: str = ""
     VAPI_WEBHOOK_SECRET: str = ""
+    VAPI_API_KEY: str = ""
+    BACKEND_URL: str = "http://localhost:8000"
 
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

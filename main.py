@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from lib.config import settings
-from routers import vapi, auth, actions
+from routers import vapi, auth, actions, phone_setup
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +39,7 @@ app.add_middleware(
 app.include_router(vapi.router)
 app.include_router(auth.router)
 app.include_router(actions.router)
+app.include_router(phone_setup.router)
 
 
 @app.get("/health")
