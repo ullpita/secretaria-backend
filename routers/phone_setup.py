@@ -85,28 +85,26 @@ async def _configure_vapi(
                     break
 
         if existing_phone_id:
-            patch_resp = await client.patch(
-                f"{VAPI_API}/phone-number/{existing_phone_id}",
-                headers=headers,
-                json={"assistantId": assistant_id, "serverUrl": None},
-            )
-            if patch_resp.status_code not in (200, 201):
-                logger.warning("Failed to update existing phone: %s", patch_resp.text)
-            vapi_phone_id = existing_phone_id
-            logger.info("Linked existing phone %s to assistant %s", vapi_phone_id, assistant_id)
-        else:
-            phone_resp = await client.post(f"{VAPI_API}/phone-number", headers=headers, json={
-                "provider": "twilio",
-                "number": normalized,
-                "twilioAccountSid": twilio_account_sid,
-                "twilioAuthToken": twilio_auth_token,
-                "assistantId": assistant_id,
-            })
-            if phone_resp.status_code not in (200, 201):
-                await client.delete(f"{VAPI_API}/assistant/{assistant_id}", headers=headers)
-                raise HTTPException(400, f"Impossible d'importer le numéro: {phone_resp.text}")
-            vapi_phone_id = phone_resp.json()["id"]
-            logger.info("Imported %s as Vapi phone %s", normalized, vapi_phone_id)
+            # Delete existing entry so re-import reconfigures the Twilio webhook
+            del_resp = await client.delete(f"{VAPI_API}/phone-number/{existing_phone_id}", headers=headers)
+            if del_resp.status_code not in (200, 204):
+                logger.warning("Failed to delete existing Vapi phone entry: %s", del_resp.text)
+            else:
+                logger.info("Deleted existing Vapi phone entry %s to force re-import", existing_phone_id)
+
+        # Import (or re-import) the number — this also reconfigures the Twilio webhook
+        phone_resp = await client.post(f"{VAPI_API}/phone-number", headers=headers, json={
+            "provider": "twilio",
+            "number": normalized,
+            "twilioAccountSid": twilio_account_sid,
+            "twilioAuthToken": twilio_auth_token,
+            "assistantId": assistant_id,
+        })
+        if phone_resp.status_code not in (200, 201):
+            await client.delete(f"{VAPI_API}/assistant/{assistant_id}", headers=headers)
+            raise HTTPException(400, f"Impossible d'importer le numéro: {phone_resp.text}")
+        vapi_phone_id = phone_resp.json()["id"]
+        logger.info("Imported %s as Vapi phone %s", normalized, vapi_phone_id)
 
     return vapi_phone_id, assistant_id
 
