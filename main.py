@@ -44,7 +44,7 @@ app.include_router(phone_setup.router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "env": settings.APP_ENV}
+    return {"status": "ok", "env": settings.APP_ENV, "build": "v4"}
 
 
 @app.get("/debug/config")
