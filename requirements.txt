@@ -24,3 +24,6 @@ cryptography==44.0.0
 
 # Security
 python-jose[cryptography]==3.3.0
+
+# Date parsing
+python-dateutil==2.9.0

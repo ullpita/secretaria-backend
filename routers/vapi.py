@@ -4,6 +4,7 @@ import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
+from dateutil import parser as dateutil_parser
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks
 from lib.config import settings
 from lib.supabase import get_supabase
@@ -59,8 +60,13 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
         call_data = payload.call
         artifact = payload.artifact
 
-        # Extract org_id from Vapi metadata (set when creating the assistant)
-        org_id = call_data.get("metadata", {}).get("org_id")
+        # Extract org_id — check call metadata first, then assistant metadata
+        call_meta = call_data.get("metadata") or {}
+        assistant_meta = (call_data.get("assistant") or {}).get("metadata") or {}
+        org_id = call_meta.get("org_id") or assistant_meta.get("org_id")
+
+        if not org_id:
+            logger.warning("No org_id found in call or assistant metadata — call will be saved without org")
 
         call_id = f"call_{uuid.uuid4().hex[:12]}"
         transcript_raw = artifact.get("messages", [])
@@ -76,14 +82,19 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
             if m.get("role") in ("assistant", "user")
         ]
 
+        # Calculate duration from ISO timestamps (Vapi sends strings, not unix)
+        duration_seconds = _calc_duration(
+            call_data.get("startedAt"), call_data.get("endedAt")
+        )
+
         call_payload = {
             "call_id": call_id,
             "org_id": org_id,
             "caller_number": call_data.get("customer", {}).get("number", "unknown"),
-            "duration_seconds": int(call_data.get("endedAt", 0) or 0) - int(call_data.get("startedAt", 0) or 0),
+            "duration_seconds": duration_seconds,
             "started_at": call_data.get("createdAt") or datetime.now(timezone.utc).isoformat(),
             "transcript": transcript,
-            "sector": call_data.get("metadata", {}).get("sector"),
+            "sector": call_meta.get("sector") or assistant_meta.get("sector"),
         }
 
         # Queue async processing (non-blocking)
@@ -97,3 +108,15 @@ async def vapi_webhook(request: Request, background_tasks: BackgroundTasks):
 def _format_ts(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     return f"{m}:{s:02d}"
+
+
+def _calc_duration(started_at: str | None, ended_at: str | None) -> int:
+    """Parse ISO timestamps from Vapi and return duration in seconds."""
+    try:
+        if started_at and ended_at:
+            start = dateutil_parser.parse(started_at)
+            end = dateutil_parser.parse(ended_at)
+            return max(0, int((end - start).total_seconds()))
+    except Exception:
+        pass
+    return 0
