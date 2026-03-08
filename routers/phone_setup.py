@@ -57,7 +57,7 @@ async def _configure_vapi(
             "name": "Sofia",
             "model": {
                 "provider": "anthropic",
-                "model": "claude-sonnet-4-5",
+                "model": "claude-sonnet-4-5-20250929",
                 "systemPrompt": SOFIA_SYSTEM_PROMPT,
             },
             "voice": {
