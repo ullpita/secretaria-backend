@@ -52,7 +52,15 @@ async def _configure_vapi(
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
-        # Step 1: Create Sofia assistant
+        # Step 1: Delete any existing Sofia assistants for this org to avoid orphans
+        list_asst_resp = await client.get(f"{VAPI_API}/assistant", headers=headers)
+        if list_asst_resp.status_code == 200:
+            for a in list_asst_resp.json():
+                if a.get("name") == "Sofia" and (a.get("metadata") or {}).get("org_id") == org_id:
+                    await client.delete(f"{VAPI_API}/assistant/{a['id']}", headers=headers)
+                    logger.info("Deleted orphan Sofia assistant %s for org %s", a["id"], org_id)
+
+        # Step 2: Create fresh Sofia assistant
         asst_resp = await client.post(f"{VAPI_API}/assistant", headers=headers, json={
             "name": "Sofia",
             "model": {
