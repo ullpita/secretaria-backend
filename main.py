@@ -44,15 +44,4 @@ app.include_router(phone_setup.router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "env": settings.APP_ENV, "build": "v4"}
-
-
-@app.get("/debug/config")
-async def debug_config():
-    return {
-        "TWILIO_ACCOUNT_SID_set": bool(settings.TWILIO_ACCOUNT_SID),
-        "TWILIO_ACCOUNT_SID_prefix": settings.TWILIO_ACCOUNT_SID[:4] if settings.TWILIO_ACCOUNT_SID else None,
-        "TWILIO_AUTH_TOKEN_set": bool(settings.TWILIO_AUTH_TOKEN),
-        "VAPI_API_KEY_set": bool(settings.VAPI_API_KEY),
-        "BACKEND_URL": settings.BACKEND_URL,
-    }
+    return {"status": "ok", "env": settings.APP_ENV}
