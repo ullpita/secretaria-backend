@@ -140,32 +140,46 @@ async def provision_phone(req: ProvisionRequest):
     twilio_auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        # Search available French local numbers
-        search_resp = await client.get(
-            f"{TWILIO_API}/Accounts/{settings.TWILIO_ACCOUNT_SID}/AvailablePhoneNumbers/FR/Local.json",
-            auth=twilio_auth,
-            params={"VoiceEnabled": "true", "PageSize": "5"},
-        )
-        if search_resp.status_code != 200:
-            raise HTTPException(400, f"Impossible de chercher des numéros français: {search_resp.text}")
-
-        numbers = search_resp.json().get("available_phone_numbers", [])
-        if not numbers:
-            raise HTTPException(404, "Aucun numéro français disponible pour le moment")
-
-        chosen = numbers[0]["phone_number"]
-        logger.info("Provisioning Twilio number %s for org %s", chosen, req.org_id)
-
-        # Purchase the number
-        buy_resp = await client.post(
+        # Check for existing numbers on the account first (trial accounts can't buy more)
+        existing_resp = await client.get(
             f"{TWILIO_API}/Accounts/{settings.TWILIO_ACCOUNT_SID}/IncomingPhoneNumbers.json",
             auth=twilio_auth,
-            data={"PhoneNumber": chosen},
+            params={"PageSize": "10"},
         )
-        if buy_resp.status_code not in (200, 201):
-            raise HTTPException(400, f"Impossible d'acheter le numéro: {buy_resp.text}")
+        existing_numbers = []
+        if existing_resp.status_code == 200:
+            existing_numbers = existing_resp.json().get("incoming_phone_numbers", [])
 
-        logger.info("Purchased %s", chosen)
+        if existing_numbers:
+            # Reuse first available number
+            chosen = existing_numbers[0]["phone_number"]
+            logger.info("Reusing existing Twilio number %s for org %s", chosen, req.org_id)
+        else:
+            # No existing number — try to buy one
+            search_resp = await client.get(
+                f"{TWILIO_API}/Accounts/{settings.TWILIO_ACCOUNT_SID}/AvailablePhoneNumbers/FR/Local.json",
+                auth=twilio_auth,
+                params={"VoiceEnabled": "true", "PageSize": "5"},
+            )
+            if search_resp.status_code != 200:
+                raise HTTPException(400, f"Impossible de chercher des numéros français: {search_resp.text}")
+
+            numbers = search_resp.json().get("available_phone_numbers", [])
+            if not numbers:
+                raise HTTPException(404, "Aucun numéro français disponible pour le moment")
+
+            chosen = numbers[0]["phone_number"]
+            logger.info("Purchasing Twilio number %s for org %s", chosen, req.org_id)
+
+            buy_resp = await client.post(
+                f"{TWILIO_API}/Accounts/{settings.TWILIO_ACCOUNT_SID}/IncomingPhoneNumbers.json",
+                auth=twilio_auth,
+                data={"PhoneNumber": chosen},
+            )
+            if buy_resp.status_code not in (200, 201):
+                raise HTTPException(400, f"Impossible d'acheter le numéro: {buy_resp.text}")
+
+            logger.info("Purchased %s", chosen)
 
     # Configure Vapi with Secretaria's Twilio credentials
     vapi_phone_id, assistant_id = await _configure_vapi(
