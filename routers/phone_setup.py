@@ -88,7 +88,7 @@ async def _configure_vapi(
             patch_resp = await client.patch(
                 f"{VAPI_API}/phone-number/{existing_phone_id}",
                 headers=headers,
-                json={"assistantId": assistant_id},
+                json={"assistantId": assistant_id, "serverUrl": None},
             )
             if patch_resp.status_code not in (200, 201):
                 logger.warning("Failed to update existing phone: %s", patch_resp.text)
